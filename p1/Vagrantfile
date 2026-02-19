@@ -5,49 +5,91 @@
 # configures the configuration version (we support older styles for
 # backwards compatibility). Please don't change it unless you know what
 # you're doing.
-Vagrant.configure("2") do |config|
-	# Machine 1 = Server
-	config.vm.define"jecolmouS" do |server|
-		server.vm.box = "ubuntu/jammy64"
-		server.vm.hostname = "jecolmouS"
-		server.vm.network "private_network", ip: "192.168.56.110"
+  
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
 
-		server.vm.provider "virtualbox" do |vb|
-			vb.memory = 1024
-			vb.cpus = 1
-			vb.customize ["modifyvm", :id, "--name", "jecolmouS"]
-		end
-		server.vm.provision "shell", inline: <<-SHELL
-			curl -sfL https://get.k3s.io | sh -
-			sudo apt-get update 
-			sudo apt-get install -y apt-transport-https ca-certificates curl
-			curl -fsSl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
-			echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-			sudo apt-get update
-			sudo apt-get install -y kubectl
-		SHELL
-	end
-	# Machine 2 = ServerWorker Agent
-	config.vm.define "jecolmouSW" do |worker|
-		worker.vm.box = "ubuntu/jammy64"
-		worker.vm.hostname = "jecolmouSW"
-		worker.vm.network "private_network", ip: "192.168.56.111"
-		worker.vm.provider "virtual_box" do |vb|
-			vb.memory = 1024
-			vb.cpus = 1
-			vb.customize ["modifyvm", :id, "--name", "jecolmouSW"]
-		end
-		worker.vm.provision "shell", inline: <<-SHELL
-			curl -sfL https://get.k3s.io | K3S_URL=https://192.168.56.110:6443 K3S_TOKEN=TOKEN sh -
-			sudo apt-get update 
-			sudo apt-get install -y kubectl
-			curl -fsSl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
-			echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-			sudo apt-get update
-			sudo apt-get install -y kubectl
-		SHELL
-	end
-  # The most common configuration options are documented and commented below.
+# Vagrantfile pour k3s : 1 server + 1 worker
+
+VAGRANTFILE_API_VERSION = "2"
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+
+  config.vm.box = "ubuntu/focal64"
+
+  # ========================
+  # Machine 1 : Server
+  # ========================
+  config.vm.define "jecolmouS" do |server|
+    server.vm.hostname = "jecolmouS"
+    server.vm.network "private_network", ip: "192.168.56.110"
+
+    server.vm.provision "shell", inline: <<-SHELL
+      echo "[SERVER] Updating packages..."
+      sudo apt-get update -y && sudo apt-get upgrade -y
+      echo "[SERVER] Installing curl..."
+      sudo apt-get install -y curl
+
+      echo "[SERVER] Installing k3s server..."
+      curl -sfL https://get.k3s.io | sh -
+
+      echo "[SERVER] Waiting for k3s server to be ready..."
+      until sudo k3s kubectl get nodes >/dev/null 2>&1; do
+        sleep 5
+      done
+
+      echo "[SERVER] Server ready!"
+
+      # Export token to /vagrant for worker to read
+      sudo cat /var/lib/rancher/k3s/server/node-token > /vagrant/token
+      echo "[SERVER] Token written to /vagrant/token"
+    SHELL
+  end
+
+  # ========================
+  # Machine 2 : Worker
+  # ========================
+  config.vm.define "jecolmouSW" do |worker|
+    worker.vm.hostname = "jecolmouSW"
+    worker.vm.network "private_network", ip: "192.168.56.111"
+
+    worker.vm.provision "shell", inline: <<-SHELL
+      echo "[WORKER] Updating packages..."
+      sudo apt-get update -y && sudo apt-get upgrade -y
+      sudo apt-get install -y curl
+
+      echo "[WORKER] Waiting for server token..."
+      while [ ! -f /vagrant/token ]; do
+        sleep 2
+      done
+      TOKEN=$(cat /vagrant/token)
+      echo "[WORKER] Token found: $TOKEN"
+
+      # Attendre que le server k3s accepte les connexions
+      SERVER_IP="192.168.56.110"
+      until curl -ks https://$SERVER_IP:6443 >/dev/null; do
+        echo "[WORKER] Server not ready, sleeping 5 seconds..."
+        sleep 5
+      done
+
+      echo "[WORKER] Installing k3s agent..."
+      curl -sfL https://get.k3s.io | K3S_URL=https://$SERVER_IP:6443 K3S_TOKEN=$TOKEN sh -
+
+      echo "[WORKER] Agent installed!"
+    SHELL
+  end
+
+
+
+
+
+
+
+
+
+
+
+# The most common configuration options are documented and commented below.
   # For a complete reference, please see the online documentation at
   # https://docs.vagrantup.com.
 
