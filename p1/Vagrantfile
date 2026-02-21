@@ -11,80 +11,83 @@
 
 # Vagrantfile pour k3s : 1 server + 1 worker
 
-VAGRANTFILE_API_VERSION = "2"
 
-Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+Vagrant.configure("2") do |config|
+  # Box à utiliser
+  config.vm.box = "ubuntu/jammy64"
 
-  config.vm.box = "ubuntu/focal64"
+  # VM 1
+  config.vm.define "jecolmouS" do |jecolmouS|
+	jecolmouS.vm.hostname = "jecolmouS"
 
-  # ========================
-  # Machine 1 : Server
-  # ========================
-  config.vm.define "jecolmouS" do |server|
-    server.vm.hostname = "jecolmouS"
-    server.vm.network "private_network", ip: "192.168.56.110"
+	# Definir les ressources obligatoires dans le sujet
+	jecolmouS.vm.provider "virtualbox" do |vb|
+		vb.memory = "1024"
+		vb.cpus = 1
+	end
 
-    server.vm.provision "shell", inline: <<-SHELL
-      echo "[SERVER] Updating packages..."
-      sudo apt-get update -y && sudo apt-get upgrade -y
-      echo "[SERVER] Installing curl..."
-      sudo apt-get install -y curl
+    	# Configuration réseau
+	jecolmouS.vm.network "private_network", ip: "192.168.56.110"
+    	
+	# Forcer IPv4 et désactiver IPv6 dans la VM
+	jecolmouS.vm.provision "shell", inline: <<-SHELL
+		echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+		echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+		sudo sysctl -p
+		# Forcer apt à utiliser IPv4
+		echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+	SHELL
+	
+	# Installer k3s en mode controlleur
+	jecolmouS.vm.provision "shell", inline: <<-SHELL
+		sudo apt update -o Acquire::ForceIPv4=true
+		sudo apt install -y curl
+		# Installe k3s en mode serveur controller
+		curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--node-ip=192.168.56.110 --advertise-address=192.168.56.110" sh -
+		# Verification kubectl accessible via k3s
+		sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl 
+		sudo cp /var/lib/rancher/k3s/server/node-token /vagrant/k3s_token
+		sudo chmod 644 /vagrant/k3s_token
+	SHELL
+	end
 
-      echo "[SERVER] Installing k3s server..."
-      curl -sfL https://get.k3s.io | sh -
+  # VM 2
+  config.vm.define "jecolmouSW" do |jecolmouSW|
+	jecolmouSW.vm.hostname = "jecolmouSW"
 
-      echo "[SERVER] Waiting for k3s server to be ready..."
-      until sudo k3s kubectl get nodes >/dev/null 2>&1; do
-        sleep 5
-      done
+	# Definir les ressources obligatoires dans le sujet
+        jecolmouSW.vm.provider "virtualbox" do |vb|
+                vb.memory = "1024"
+                vb.cpus = 1
+        end
 
-      echo "[SERVER] Server ready!"
+    	# Configuration réseau
+	jecolmouSW.vm.network "private_network", ip: "192.168.56.111"
+	
+	# Forcer IPv4 et désactiver IPv6 dans la VM
+	jecolmouSW.vm.provision "shell", inline: <<-SHELL
+		echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+		echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+		sudo sysctl -p
+		# Forcer apt à utiliser IPv4
+		echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+	SHELL
+	
+	# Installer k3s en mode agent
+  	jecolmouSW.vm.provision "shell", inline: <<-SHELL
+		export K3S_NODE_IP=192.168.56.111
+		export K3S_AGENT_NODE_IP=192.168.56.111
+		K3S_TOKEN=$(cat /vagrant/k3s_token)
+	SHELL
 
-      # Export token to /vagrant for worker to read
-      sudo cat /var/lib/rancher/k3s/server/node-token > /vagrant/token
-      echo "[SERVER] Token written to /vagrant/token"
-    SHELL
-  end
-
-  # ========================
-  # Machine 2 : Worker
-  # ========================
-  config.vm.define "jecolmouSW" do |worker|
-    worker.vm.hostname = "jecolmouSW"
-    worker.vm.network "private_network", ip: "192.168.56.111"
-
-    worker.vm.provision "shell", inline: <<-SHELL
-      echo "[WORKER] Updating packages..."
-      sudo apt-get update -y && sudo apt-get upgrade -y
-      sudo apt-get install -y curl
-
-      echo "[WORKER] Waiting for server token..."
-      while [ ! -f /vagrant/token ]; do
-        sleep 2
-      done
-      TOKEN=$(cat /vagrant/token)
-      echo "[WORKER] Token found: $TOKEN"
-
-      # Attendre que le server k3s accepte les connexions
-      SERVER_IP="192.168.56.110"
-      until curl -ks https://$SERVER_IP:6443 >/dev/null; do
-        echo "[WORKER] Server not ready, sleeping 5 seconds..."
-        sleep 5
-      done
-
-      echo "[WORKER] Installing k3s agent..."
-      curl -sfL https://get.k3s.io | K3S_URL=https://$SERVER_IP:6443 K3S_TOKEN=$TOKEN sh -
-
-      echo "[WORKER] Agent installed!"
-    SHELL
-  end
-
-
-
-
-
-
-
+	# Lancer l'agent avec debug pour voir le démarrage
+	jecolmouSW.vm.provision "shell", inline: <<-SHELL
+		K3S_TOKEN=$(cat /vagrant/k3s_token)
+		curl -sfL https://get.k3s.io | K3S_URL=https://192.168.56.110:6443 K3S_TOKEN=$K3S_TOKEN sh -
+		sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+	SHELL
+	end
+end
 
 
 
@@ -95,7 +98,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://vagrantcloud.com/search.
-  config.vm.box = "ubuntu/jammy64"
 
   # Disable automatic box update checking. If you disable this, then
   # boxes will only be checked for updates when the user runs
@@ -157,4 +159,3 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   #   apt-get update
   #   apt-get install -y apache2
   # SHELL
-end
