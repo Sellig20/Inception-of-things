@@ -1,161 +1,272 @@
-# -*- mode: ruby -*-
-# vi: set ft=ruby :
 
-# All Vagrant configuration is done below. The "2" in Vagrant.configure
-# configures the configuration version (we support older styles for
-# backwards compatibility). Please don't change it unless you know what
-# you're doing.
-  
-# -*- mode: ruby -*-
-# vi: set ft=ruby :
+# Vagrant.configure("2") do |config|
+#   # Box à utiliser
+#   config.vm.box = "generic/alpine312"
 
-# Vagrantfile pour k3s : 1 server + 1 worker
+#   # VM 1
+#   config.vm.define "jecolmouS" do |jecolmouS|
+# 	jecolmouS.vm.hostname = "jecolmouS"
+# 	# Definir les ressources obligatoires dans le sujet
+# 	jecolmouS.vm.provider "virtualbox" do |vb|
+# 		vb.memory = "1024"
+# 		vb.cpus = 1
+# 	end
+
+#     	# Configuration réseau
+# 	jecolmouS.vm.network "private_network", ip: "192.168.56.110"
+    	
+# 	jecolmouS.vm.synced_folder "./confs", "/confs", type: "virtualbox"
+# 	# Forcer IPv4 et désactiver IPv6 dans la VM
+# 	jecolmouS.vm.provision "shell", inline: <<-SHELL
+# 		# Installer curl si besoin
+#       		sudo apk add --no-cache curl
+
+#       		# Installer k3s en mode serveur
+#       		curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE="644" INSTALL_K3S_EXEC="--flannel-iface eth1" sh -
+
+#       		# Attendre que le token soit créé
+#       		NODE_TOKEN="/var/lib/rancher/k3s/server/node-token"
+#       		while [ ! -e ${NODE_TOKEN} ]; do
+#         		sleep 2
+#       		done
+
+#       		# Copier le token et le kubeconfig dans le dossier partagé
+#       		sudo cp ${NODE_TOKEN} /confs/node-token
+#       		sudo cp /etc/rancher/k3s/k3s.yaml /k3s.yaml
+#       		sudo chmod 644 /node-token /k3s.yaml
+# 		SHELL
+# 	end
+
+#   # VM 2
+#   config.vm.define "jecolmouSW" do |jecolmouSW|
+# 	jecolmouSW.vm.hostname = "jecolmouSW"
+
+# 	# Definir les ressources obligatoires dans le sujet
+#         jecolmouSW.vm.provider "virtualbox" do |vb|
+#                 vb.memory = "1024"
+#                 vb.cpus = 1
+#         end
+
+#     	# Configuration réseau
+# 	jecolmouSW.vm.network "private_network", ip: "192.168.56.111"
+	
+# 	# Forcer IPv4 et désactiver IPv6 dans la VM
+# 	jecolmouSW.vm.provision "shell", inline: <<-SHELL
+# 		# Installer curl si besoin
+#       		sudo apk add --no-cache curl
+
+#       		# Récupérer le token depuis le dossier partagé
+#       		K3S_TOKEN=$(sudo cat /confs/node-token)
+
+#       		# Installer k3s en mode agent et se connecter au master
+#       		curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE="644" K3S_URL=https://192.168.56.110:6443 K3S_TOKEN=$K3S_TOKEN INSTALL_K3S_EXEC="--flannel-iface eth1" sh -
+# 		SHELL
+# 	end
+# end
 
 
 Vagrant.configure("2") do |config|
+
   # Box à utiliser
   config.vm.box = "ubuntu/jammy64"
+ 
 
-  # VM 1
+  # VM 1 - Server
   config.vm.define "jecolmouS" do |jecolmouS|
-	jecolmouS.vm.hostname = "jecolmouS"
+    jecolmouS.vm.hostname = "jecolmouS"
 
-	# Definir les ressources obligatoires dans le sujet
-	jecolmouS.vm.provider "virtualbox" do |vb|
-		vb.memory = "1024"
-		vb.cpus = 1
-	end
+    # Definir les ressources obligatoires dans le sujet
+    jecolmouS.vm.provider "virtualbox" do |vb|
+      vb.memory = "1024"
+      vb.cpus = 1
+	  vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+    end
 
-    	# Configuration réseau
-	jecolmouS.vm.network "private_network", ip: "192.168.56.110"
+    # Configuration réseau
+    jecolmouS.vm.network "private_network", ip: "192.168.56.110"
+
+	# Configuration systeme et prerequis
+	jecolmouS.vm.provision "shell", inline: <<-SHELL
+		set -e
+
+    # Forcer IPv4 et désactiver IPv6 dans la VM
+		echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+      	echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+      	sudo sysctl -p
+      	
+		# Forcer apt à utiliser IPv4
+      	echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+
+		#MAJ et install des paquets de base
+		export DEBIAN_FRONTEND=noninteractive
+		sudo apt-get update -o Acquire::ForceIPV4=true
+		sudo apt-get install -y curl apt-transport-https ca-certificates
+
+		#Desactiver le swap, requis par K3s
+		sudo swapoff -a
+		sudo sed -i '/ swap / s/^/#/' /etc/fstab
+
+		echo "----------Prerequis installes ok"
+	SHELL
+
+    # Installer k3s en mode controlleur
+    jecolmouS.vm.provision "shell", inline: <<-SHELL
+		set -e
     	
-	# Forcer IPv4 et désactiver IPv6 dans la VM
-	jecolmouS.vm.provision "shell", inline: <<-SHELL
-		echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
-		echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
-		sudo sysctl -p
-		# Forcer apt à utiliser IPv4
-		echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-	SHELL
-	
-	# Installer k3s en mode controlleur
-	jecolmouS.vm.provision "shell", inline: <<-SHELL
-		sudo apt update -o Acquire::ForceIPv4=true
-		sudo apt install -y curl
-		# Installe k3s en mode serveur controller
-		curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--node-ip=192.168.56.110 --advertise-address=192.168.56.110" sh -
-		# Verification kubectl accessible via k3s
-		sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl 
-		sudo cp /var/lib/rancher/k3s/server/node-token /vagrant/k3s_token
-		sudo chmod 644 /vagrant/k3s_token
-	SHELL
-	end
+		echo "---------- On va resoudre cette ip"
+		IFACE=$(ip -4 addr show | grep "192.168.56.110" | awk '{print $NF}')
 
-  # VM 2
-  config.vm.define "jecolmouSW" do |jecolmouSW|
-	jecolmouSW.vm.hostname = "jecolmouSW"
+		if [ -z "$IFACE" ]; then
+			echo "----------ERREUR: impossible de trouver l'interface du reseau"
+			ip addr show
+			exit 1
+		fi
 
-	# Definir les ressources obligatoires dans le sujet
-        jecolmouSW.vm.provider "virtualbox" do |vb|
-                vb.memory = "1024"
-                vb.cpus = 1
-        end
+		echo "----------interface detectee : $IFACE"
 
-    	# Configuration réseau
-	jecolmouSW.vm.network "private_network", ip: "192.168.56.111"
-	
-	# Forcer IPv4 et désactiver IPv6 dans la VM
-	jecolmouSW.vm.provision "shell", inline: <<-SHELL
-		echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
-		echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
-		sudo sysctl -p
-		# Forcer apt à utiliser IPv4
-		echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-	SHELL
-	
-	# Installer k3s en mode agent
-  	jecolmouSW.vm.provision "shell", inline: <<-SHELL
-		export K3S_NODE_IP=192.168.56.111
-		export K3S_AGENT_NODE_IP=192.168.56.111
-		K3S_TOKEN=$(cat /vagrant/k3s_token)
-	SHELL
+		echo "----------Installation de K3s en mode controller = server..."
+     
+		curl -sfL https://get.k3s.io | sh -s - server \
+			--node-ip=192.168.56.110 \
+			--flannel-iface=$IFACE \
+			--write-kubeconfig-mode=644 \
+			--disable=traefik \
 
-	# Lancer l'agent avec debug pour voir le démarrage
-	jecolmouSW.vm.provision "shell", inline: <<-SHELL
-		K3S_TOKEN=$(cat /vagrant/k3s_token)
-		curl -sfL https://get.k3s.io | K3S_URL=https://192.168.56.110:6443 K3S_TOKEN=$K3S_TOKEN sh -
+      	# Attendre que K3s soit complètement prêt
+      	echo "----------Attente du démarrage de K3s server..."
+		sleep 10
+
+		#Verifier le statut
+		if ! sudo systemctl is-active --quiet k3s; then
+			echo "ERREUR: k3s n'a pas demarre correctement"
+			sudo journalctl -u k3s.service -n 50 --no-pager
+			exit 1
+		fi
+
+		# Attendre que kubectl soit fonctionnel
+		attempt=0
+		max_attempts=30
+		until sudo k3s kubectl get nodes 2>/dev/null || [ $attempt -eq $max_attempts ]; do
+			echo "----------Kubectl pas encore prêt, en attente...($attempts/$max_attempts)"
+			sleep 2
+			attempt=$((attempt + 1))
+		done
+
+		if [ $attempt -eq $max_attempts ]; then
+			echo "----------ERREUR: kubectl ne repond pas"
+			exit 1
+		fi
+
+		# Lien symbolique pour kubectl
 		sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+
+		# Copier le token
+		sudo cp /var/lib/rancher/k3s/server/node-token /vagrant/k3s_token
+      	sudo chmod 644 /vagrant/k3s_token
+     
+
+		echo "----------*** OK *** k3s server installe avec SUCCES"
+		sudo kubectl get nodes
+    SHELL
+  end
+
+  # VM 2 - ServerWorker
+  config.vm.define "jecolmouSW" do |jecolmouSW|
+    jecolmouSW.vm.hostname = "jecolmouSW"
+
+    # Definir les ressources obligatoires dans le sujet
+    jecolmouSW.vm.provider "virtualbox" do |vb|
+      vb.memory = "1024"
+      vb.cpus = 1
+	  vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+    end
+
+    # Configuration réseau
+    jecolmouSW.vm.network "private_network", ip: "192.168.56.111"
+
+	# Configurqtion systeme et prerequis
+	jecolmouSW.vm.provision "shell", inline: <<-SHELL
+		set -e
+
+    	# Forcer IPv4 et désactiver IPv6 dans la VM
+      	echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+      	echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+      	sudo sysctl -p
+
+      	# Forcer apt à utiliser IPv4
+      	echo '----------Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+		# MAJ des installations
+		export DEBIAN_FRONTEND=noninteractive
+		sudo apt-get update -o Acquire::ForceIPV4=true
+		sudo apt-get install -y curl apt-transport-https ca-certificates
+
+		#Desactiver le swap, requis par K3s
+		sudo swapoff -a
+		sudo sed -i '/ swap / s/^/#/' /etc/fstab
+
+		echo "----------Prerequis installes ok"
 	SHELL
-	end
+
+    # Installer k3s en mode agent
+    jecolmouSW.vm.provision "shell", inline: <<-SHELL
+		set -e
+
+		# Attendre le token
+		echo "----------attente du token de jecolmouS"
+		attempt=0
+		until [ -f /vagrant/k3s_token ] || [ $attempt -eq 60 ]; do
+			sleep 2
+			attempt=$((attempt + 1))
+		done
+
+		if [ ! -f /vagrant/k3s_token ]; then
+			echo "----------ERREUR: Token nooooo dispo"
+			exit 1
+		fi
+
+		# Verifier la connection avec le serveur
+		echo "----------Verfication de la connection au serveur..."
+		attempt=0
+		until nc -z -w5 192.168.56.110 6443 || [ $attempt -eq 30 ]; do
+			echo "Serveur pas encore accessible...($attempt/30)"
+			sleep 5
+			attempt=$((attempt + 1))
+		done
+
+		if [ $attempt -eq 30 ]; then
+			echo "----------ERREUR: Depuis l'agent = serveur inaccessible"
+			exit 1
+		fi
+
+		echo "---------- On va resoudre cette ip"
+		IFACE=$(ip -4 addr show | grep "192.168.56.111" | awk '{print $NF}')
+
+		if [ -z "$IFACE" ]; then
+			echo "----------ERREUR: impossible de trouver l'interface du reseau"
+			ip addr show
+			exit 1
+		fi
+
+		echo "----------interface detectee : $IFACE"
+
+	    # Installer l'agent K3s
+		echo "----------Installation de k3s agent"
+		K3S_TOKEN=$(cat /vagrant/k3s_token)
+		curl -sfL https://get.k3s.io | K3S_URL=https://192.168.56.110:6443 \
+			K3S_TOKEN=$K3S_TOKEN sh -s - agent \
+			--node-ip=192.168.56.111 \
+			--flannel-iface=$IFACE
+		
+		# Attendre que l'agent soit good
+		sleep 5
+		if ! sudo systemctl is-active --quiet k3s-agent; then
+			echo "----------ERREUR: K3s agent n'a pas demarre"
+			sudo journalctl -u k3s-agent.service -n 50 --no-pager
+			exit 1
+		fi
+
+		sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+		echo "----------*** OK *** K3s agent SUCCES"
+    SHELL
+  end
 end
-
-
-
-
-# The most common configuration options are documented and commented below.
-  # For a complete reference, please see the online documentation at
-  # https://docs.vagrantup.com.
-
-  # Every Vagrant development environment requires a box. You can search for
-  # boxes at https://vagrantcloud.com/search.
-
-  # Disable automatic box update checking. If you disable this, then
-  # boxes will only be checked for updates when the user runs
-  # `vagrant box outdated`. This is not recommended.
-  # config.vm.box_check_update = false
-
-  # Create a forwarded port mapping which allows access to a specific port
-  # within the machine from a port on the host machine. In the example below,
-  # accessing "localhost:8080" will access port 80 on the guest machine.
-  # NOTE: This will enable public access to the opened port
-  # config.vm.network "forwarded_port", guest: 80, host: 8080
-
-  # Create a forwarded port mapping which allows access to a specific port
-  # within the machine from a port on the host machine and only allow access
-  # via 127.0.0.1 to disable public access
-  # config.vm.network "forwarded_port", guest: 80, host: 8080, host_ip: "127.0.0.1"
-
-  # Create a private network, which allows host-only access to the machine
-  # using a specific IP.
-  # config.vm.network "private_network", ip: "192.168.33.10"
-
-  # Create a public network, which generally matched to bridged network.
-  # Bridged networks make the machine appear as another physical device on
-  # your network.
-  # config.vm.network "public_network"
-
-  # Share an additional folder to the guest VM. The first argument is
-  # the path on the host to the actual folder. The second argument is
-  # the path on the guest to mount the folder. And the optional third
-  # argument is a set of non-required options.
-  # config.vm.synced_folder "../data", "/vagrant_data"
-
-  # Disable the default share of the current code directory. Doing this
-  # provides improved isolation between the vagrant box and your host
-  # by making sure your Vagrantfile isn't accessible to the vagrant box.
-  # If you use this you may want to enable additional shared subfolders as
-  # shown above.
-  # config.vm.synced_folder ".", "/vagrant", disabled: true
-
-  # Provider-specific configuration so you can fine-tune various
-  # backing providers for Vagrant. These expose provider-specific options.
-  # Example for VirtualBox:
-  #
-  # config.vm.provider "virtualbox" do |vb|
-  #   # Display the VirtualBox GUI when booting the machine
-  #   vb.gui = true
-  #
-  #   # Customize the amount of memory on the VM:
-  #   vb.memory = "1024"
-  # end
-  #
-  # View the documentation for the provider you are using for more
-  # information on available options.
-
-  # Enable provisioning with a shell script. Additional provisioners such as
-  # Ansible, Chef, Docker, Puppet and Salt are also available. Please see the
-  # documentation for more information about their specific syntax and use.
-  # config.vm.provision "shell", inline: <<-SHELL
-  #   apt-get update
-  #   apt-get install -y apache2
-  # SHELL
