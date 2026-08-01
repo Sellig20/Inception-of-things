@@ -1,0 +1,108 @@
+
+Vagrant.configure("2") do |config|
+
+  # Box à utiliser
+  config.vm.box = "ubuntu/jammy64" 
+  # ubuntu/noble64
+ 
+  config.vm.define "jecolmouS" do |jecolmouS|
+    jecolmouS.vm.hostname = "jecolmouS"
+
+    # Definir les ressources obligatoires dans le sujet
+    jecolmouS.vm.provider "virtualbox" do |vb|
+      vb.memory = "1024"
+      vb.cpus = 1
+	  vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+    end
+
+    # Configuration réseau
+    jecolmouS.vm.network "private_network", ip: "192.168.56.110"
+
+	# Configuration systeme et prerequis
+	jecolmouS.vm.provision "shell", inline: <<-SHELL
+		set -e
+
+    # Forcer IPv4 et désactiver IPv6 dans la VM
+		echo "net.ipv6.conf.all.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+      	echo "net.ipv6.conf.default.disable_ipv6 = 1" | sudo tee -a /etc/sysctl.conf
+      	sudo sysctl -p
+      	
+		# Forcer apt à utiliser IPv4
+      	echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+
+		#MAJ et install des paquets de base
+		export DEBIAN_FRONTEND=noninteractive
+		sudo apt-get update -o Acquire::ForceIPV4=true
+		sudo apt-get install -y curl apt-transport-https ca-certificates
+
+		#Desactiver le swap, requis par K3s
+		sudo swapoff -a
+		sudo sed -i '/ swap / s/^/#/' /etc/fstab
+
+		echo "----------Prerequis installes ok"
+	SHELL
+
+    # Installer k3s en mode controlleur
+    jecolmouS.vm.provision "shell", inline: <<-SHELL
+		set -e
+    	
+		echo "---------- On va resoudre cette ip"
+		IFACE=$(ip -4 addr show | grep "192.168.56.110" | awk '{print $NF}')
+
+		if [ -z "$IFACE" ]; then
+			echo "----------ERREUR: impossible de trouver l'interface du reseau"
+			ip addr show
+			exit 1
+		fi
+
+		echo "----------interface detectee : $IFACE"
+
+		echo "----------Installation de K3s en mode controller = server..."
+     
+		curl -sfL https://get.k3s.io | sh -s - server \
+			--node-ip=192.168.56.110 \
+			--flannel-iface=$IFACE \
+			--write-kubeconfig-mode=644 \
+
+      	# Attendre que K3s soit complètement prêt
+      	echo "----------Attente du démarrage de K3s server..."
+		sleep 10
+
+		#Verifier le statut
+		if ! sudo systemctl is-active --quiet k3s; then
+			echo "ERREUR: k3s n'a pas demarre correctement"
+			sudo journalctl -u k3s.service -n 50 --no-pager
+			exit 1
+		fi
+
+		# Attendre que kubectl soit fonctionnel
+		attempt=0
+		max_attempts=30
+		until sudo k3s kubectl get nodes 2>/dev/null || [ $attempt -eq $max_attempts ]; do
+			echo "----------Kubectl pas encore prêt, en attente...($attempts/$max_attempts)"
+			sleep 2
+			attempt=$((attempt + 1))
+		done
+
+		if [ $attempt -eq $max_attempts ]; then
+			echo "----------ERREUR: kubectl ne repond pas"
+			exit 1
+		fi
+
+		# Lien symbolique pour kubectl
+		sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+
+		# Copier le token
+		sudo cp /var/lib/rancher/k3s/server/node-token /vagrant/k3s_token
+      	sudo chmod 644 /vagrant/k3s_token
+     
+		# Deployer kustomize
+		cd /vagrant/Apps/
+		echo "----------- Lancement de KUSTOMIZE"
+		kubectl apply -k .
+
+		echo "----------*** OK *** 3 apps installees avec SUCCES"
+		sudo kubectl get nodes
+    SHELL
+  end
+end
